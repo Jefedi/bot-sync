@@ -79,7 +79,10 @@ module.exports = {
                 const config = await requireConfig(message, context, 'qbit');
                 if (!config) return;
 
-                await qbitApi(config, message.guild.id, '/api/v2/torrents/pause', 'POST', 'hashes=all');
+                // qBittorrent >= 4.6.1 utilise /stop, anciennes versions /pause
+                await qbitApiWithFallback(config, message.guild.id,
+                    '/api/v2/torrents/stop', '/api/v2/torrents/pause',
+                    'POST', 'hashes=all');
                 await message.reply({ embeds: [createSuccessEmbed('Tous les torrents mis en pause.')] });
             },
         },
@@ -91,7 +94,10 @@ module.exports = {
                 const config = await requireConfig(message, context, 'qbit');
                 if (!config) return;
 
-                await qbitApi(config, message.guild.id, '/api/v2/torrents/resume', 'POST', 'hashes=all');
+                // qBittorrent >= 4.6.1 utilise /start, anciennes versions /resume
+                await qbitApiWithFallback(config, message.guild.id,
+                    '/api/v2/torrents/start', '/api/v2/torrents/resume',
+                    'POST', 'hashes=all');
                 await message.reply({ embeds: [createSuccessEmbed('Tous les torrents repris.')] });
             },
         },
@@ -149,6 +155,17 @@ async function qbitApi(config, guildId, endpoint, method = 'GET', body = null) {
         return JSON.parse(text);
     } catch {
         return text;
+    }
+}
+
+async function qbitApiWithFallback(config, guildId, primaryEndpoint, fallbackEndpoint, method, body) {
+    try {
+        return await qbitApi(config, guildId, primaryEndpoint, method, body);
+    } catch (err) {
+        if (err.message && err.message.includes('404')) {
+            return await qbitApi(config, guildId, fallbackEndpoint, method, body);
+        }
+        throw err;
     }
 }
 
