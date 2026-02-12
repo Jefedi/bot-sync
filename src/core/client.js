@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, Partials } = require('discord.js');
+const { Client, GatewayIntentBits } = require('discord.js');
 
 /**
  * Crée et retourne le client Discord avec les intents nécessaires.
@@ -13,7 +13,6 @@ function createBotClient() {
             GatewayIntentBits.GuildMessages,
             GatewayIntentBits.MessageContent,
         ],
-        partials: [Partials.Message],
     });
 }
 

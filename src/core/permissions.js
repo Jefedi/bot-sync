@@ -124,22 +124,6 @@ function invalidateCommandCache(guildId, commandName) {
     commandLevelCache.delete(getCacheKey(guildId, commandName));
 }
 
-function invalidateAllCommandCache(guildId) {
-    for (const key of commandLevelCache.keys()) {
-        if (key.startsWith(`${guildId}:`)) {
-            commandLevelCache.delete(key);
-        }
-    }
-}
-
-function invalidateAllUserCache(guildId) {
-    for (const key of userLevelCache.keys()) {
-        if (key.startsWith(`${guildId}:`)) {
-            userLevelCache.delete(key);
-        }
-    }
-}
-
 module.exports = {
     isOwner,
     getUserLevel,
@@ -147,6 +131,4 @@ module.exports = {
     checkPermission,
     invalidateUserCache,
     invalidateCommandCache,
-    invalidateAllCommandCache,
-    invalidateAllUserCache,
 };

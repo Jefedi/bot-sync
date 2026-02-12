@@ -133,7 +133,7 @@ module.exports = [
                 });
             }
 
-            const { error, count } = await context.db
+            const { error } = await context.db
                 .from('role_sync')
                 .delete()
                 .eq('source_guild_id', message.guild.id)
