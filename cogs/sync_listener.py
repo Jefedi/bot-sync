@@ -5,7 +5,7 @@ from discord.ext import commands, tasks
 import aiosqlite
 import os
 
-from cogs.utils import formater_duree
+from cogs.utils import formater_duree, avec_retry
 
 DB_PATH = os.getenv("DB_PATH")
 
@@ -69,7 +69,8 @@ class SyncListener(commands.Cog):
 
             if target_role in target_membre.roles:
                 try:
-                    await target_membre.remove_roles(
+                    await avec_retry(
+                        target_membre.remove_roles,
                         target_role,
                         reason=f"Durée expirée — rôle synchronisé depuis {formater_duree(duree_minutes)}",
                     )
@@ -251,7 +252,8 @@ class SyncListener(commands.Cog):
             return
 
         try:
-            await target_membre.add_roles(
+            await avec_retry(
+                target_membre.add_roles,
                 target_role,
                 reason=f"Synchronisation depuis {membre.guild.name} — rôle {source_role.name}",
             )
@@ -273,7 +275,7 @@ class SyncListener(commands.Cog):
             )
         except discord.HTTPException:
             await self._log_sync(
-                "Échec — erreur lors de l'ajout du rôle",
+                "Échec — erreur lors de l'ajout du rôle (après retry)",
                 membre, source_role, target_role, target_guild,
                 source_guild=membre.guild, note=note,
             )
@@ -296,7 +298,8 @@ class SyncListener(commands.Cog):
             return
 
         try:
-            await target_membre.remove_roles(
+            await avec_retry(
+                target_membre.remove_roles,
                 target_role,
                 reason=f"Synchronisation depuis {membre.guild.name} — rôle {source_role.name} retiré",
             )
@@ -317,7 +320,7 @@ class SyncListener(commands.Cog):
             )
         except discord.HTTPException:
             await self._log_sync(
-                "Échec — erreur lors du retrait du rôle",
+                "Échec — erreur lors du retrait du rôle (après retry)",
                 membre, source_role, target_role, target_guild,
                 source_guild=membre.guild, note=note,
             )

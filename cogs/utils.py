@@ -1,3 +1,4 @@
+import asyncio
 import re
 
 
@@ -38,3 +39,22 @@ def formater_duree(minutes: int) -> str:
         return f"{heures}h"
     else:
         return f"{minutes}m"
+
+
+async def avec_retry(coro_func, *args, max_tentatives=3, delai_base=1.0, **kwargs):
+    """Exécute une coroutine avec retry et backoff exponentiel.
+    Réessaie sur les erreurs HTTP transitoires de Discord."""
+    import discord
+    derniere_erreur = None
+    for tentative in range(max_tentatives):
+        try:
+            return await coro_func(*args, **kwargs)
+        except discord.HTTPException as e:
+            derniere_erreur = e
+            # Ne pas retry sur les erreurs 4xx (sauf 429 rate limit)
+            if e.status != 429 and 400 <= e.status < 500:
+                raise
+            if tentative < max_tentatives - 1:
+                delai = delai_base * (2 ** tentative)
+                await asyncio.sleep(delai)
+    raise derniere_erreur
