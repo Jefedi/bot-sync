@@ -1,89 +1,72 @@
 require('dotenv').config();
 
-const { Client, GatewayIntentBits, REST, Routes } = require('discord.js');
-const { initDb } = require('./src/database');
-const { getCommands, handleCommand, handleAutocomplete } = require('./src/syncRoles');
-const { onMemberUpdate, onMemberJoin, resyncOnReady, startExpirationChecker } = require('./src/syncListener');
-
-// Créer le client Discord avec les intents nécessaires
-const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMembers,
-    ],
-});
-
-// ──────────────────────────────────────────────
-// Événement ready : enregistrement des commandes + resync
-// ──────────────────────────────────────────────
-
-client.once('ready', async () => {
-    console.log(`Connecté en tant que ${client.user.tag}`);
-
-    // Enregistrer les commandes slash globalement
-    const rest = new REST().setToken(process.env.DISCORD_TOKEN);
-    const commands = getCommands();
-
-    try {
-        await rest.put(
-            Routes.applicationCommands(client.user.id),
-            { body: commands.map(cmd => cmd.toJSON()) }
-        );
-        console.log(`${commands.length} commande(s) slash enregistrée(s).`);
-    } catch (error) {
-        console.error("Erreur lors de l'enregistrement des commandes:", error);
-    }
-
-    // Resync au démarrage
-    await resyncOnReady(client);
-
-    // Lancer la vérification des expirations (toutes les minutes)
-    startExpirationChecker(client);
-});
-
-// ──────────────────────────────────────────────
-// Gestion des interactions (commandes + autocomplete)
-// ──────────────────────────────────────────────
-
-client.on('interactionCreate', async (interaction) => {
-    if (interaction.isAutocomplete()) {
-        return handleAutocomplete(interaction);
-    }
-    if (interaction.isChatInputCommand()) {
-        return handleCommand(interaction);
-    }
-});
-
-// ──────────────────────────────────────────────
-// Écoute des changements de rôles en temps réel
-// ──────────────────────────────────────────────
-
-client.on('guildMemberUpdate', (oldMember, newMember) => {
-    onMemberUpdate(client, oldMember, newMember).catch(error => {
-        console.error('Erreur lors de la synchronisation de rôle:', error);
-    });
-});
-
-// ──────────────────────────────────────────────
-// Sync au join : quand un membre rejoint un serveur cible
-// ──────────────────────────────────────────────
-
-client.on('guildMemberAdd', (member) => {
-    onMemberJoin(client, member).catch(error => {
-        console.error('Erreur lors de la sync au join:', error);
-    });
-});
-
-// ──────────────────────────────────────────────
-// Démarrage
-// ──────────────────────────────────────────────
+const { createBotClient } = require('./src/core/client');
+const { initDb, getDb } = require('./src/core/database');
+const { loadModules } = require('./src/core/moduleLoader');
+const { setupCommandHandler } = require('./src/core/commandHandler');
 
 async function main() {
+    console.log('=== Bot Polyvalent v2.0 ===');
+
+    // 1. Initialiser la base de données
     await initDb();
-    await client.login(process.env.DISCORD_TOKEN);
+
+    // 2. Créer le client Discord
+    const client = createBotClient();
+
+    // 3. Charger les modules
+    const modules = loadModules();
+
+    // 4. Configurer le handler de commandes (messageCreate)
+    setupCommandHandler(client, modules);
+
+    // 5. Attacher les listeners des modules
+    for (const [name, mod] of modules) {
+        if (mod.listeners) {
+            for (const [event, handler] of Object.entries(mod.listeners)) {
+                client.on(event, (...args) => {
+                    handler(client, ...args).catch(err => {
+                        console.error(`[${name}] Erreur dans le listener '${event}':`, err.message);
+                    });
+                });
+            }
+        }
+    }
+
+    // 6. Au démarrage (ready)
+    client.once('ready', async () => {
+        console.log(`[Bot] Connecté en tant que ${client.user.tag}`);
+        console.log(`[Bot] Présent sur ${client.guilds.cache.size} serveur(s).`);
+
+        const db = getDb();
+        const context = { client, db, modules };
+
+        // Appeler onReady de chaque module
+        for (const [name, mod] of modules) {
+            if (mod.onReady) {
+                try {
+                    await mod.onReady(client, context);
+                    console.log(`[${name}] Initialisation terminée.`);
+                } catch (err) {
+                    console.error(`[${name}] Erreur lors de l'initialisation:`, err.message);
+                }
+            }
+        }
+
+        console.log('[Bot] Prêt.');
+    });
+
+    // 7. Connexion
+    const token = process.env.DISCORD_TOKEN;
+    if (!token) {
+        console.error('[Bot] DISCORD_TOKEN manquant dans le .env');
+        process.exit(1);
+    }
+
+    await client.login(token);
 }
 
-main().catch(error => {
-    console.error('Erreur fatale:', error);
+main().catch(err => {
+    console.error('[Bot] Erreur fatale:', err);
     process.exit(1);
 });

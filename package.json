@@ -1,14 +1,17 @@
 {
   "name": "bot-sync",
-  "version": "1.0.0",
-  "description": "Bot Discord de synchronisation de rôles multi-serveurs",
+  "version": "2.0.0",
+  "description": "Bot Discord polyvalent multi-serveurs",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
     "discord.js": "^14.14.1",
-    "dotenv": "^16.3.1",
-    "mysql2": "^3.6.0"
+    "dotenv": "^16.3.1"
   }
 }
