@@ -4,7 +4,7 @@
 
 **bot-sync** est un bot Discord de synchronisation de rôles multi-serveurs. Conçu pour les communautés GTA RP (LSPD, BCSO, etc.), il permet de gérer les rôles depuis un **serveur racine** et de les synchroniser automatiquement vers des **serveurs départementaux** où les rôles peuvent avoir des noms différents.
 
-Le bot est écrit en **JavaScript (Node.js)** et utilise la bibliothèque **discord.js v14**. Il est hébergé sur **Pterodactyl**.
+Le bot est écrit en **JavaScript (Node.js)** et utilise la bibliothèque **discord.js v14**. Il est hébergé sur **Pterodactyl** (Docker).
 
 ## Repository Structure
 
@@ -12,11 +12,11 @@ Le bot est écrit en **JavaScript (Node.js)** et utilise la bibliothèque **disc
 bot-sync/
 ├── index.js               # Point d'entrée — init DB, enregistrement commandes, démarrage
 ├── src/
-│   ├── database.js        # Pool MySQL + initialisation des tables
+│   ├── database.js        # Pool MySQL + initialisation des tables + historique
 │   ├── utils.js           # Utilitaires partagés (parser durée, formater durée, retry)
 │   ├── logging.js         # Fonctions d'audit — embed de log dans un canal dédié
-│   ├── syncRoles.js       # Commandes slash (10 commandes avec autocomplete et cooldown)
-│   └── syncListener.js    # Sync automatique — écoute guildMemberUpdate, resync au démarrage, expirations
+│   ├── syncRoles.js       # Commandes slash (12 commandes avec autocomplete et cooldown)
+│   └── syncListener.js    # Sync automatique — guildMemberUpdate, guildMemberAdd, resync, expirations, rappels
 ├── package.json           # Dépendances Node.js (discord.js, mysql2, dotenv)
 ├── .env                   # Variables d'environnement (non commité)
 ├── .env.example           # Template des variables d'environnement
@@ -30,7 +30,7 @@ bot-sync/
 - **Framework bot :** discord.js v14 (avec `SlashCommandBuilder` pour les slash commands)
 - **Base de données :** MySQL via `mysql2/promise` (pool de connexions async)
 - **Config :** `dotenv` pour le chargement du `.env`
-- **Hébergement :** Pterodactyl
+- **Hébergement :** Pterodactyl (Docker, egg Node.js)
 
 ## Architecture
 
@@ -39,15 +39,15 @@ Le bot suit une architecture modulaire avec des modules séparés par responsabi
 ### `index.js` — Point d'entrée
 
 - Charge `.env`, configure les intents (`Guilds` + `GuildMembers` requis)
-- **Initialise automatiquement la base de données** (`initDb()`) avec création des tables
+- **Initialise automatiquement la base de données** (`initDb()`) avec création des tables et migrations
 - Enregistre les commandes slash globalement via l'API REST Discord
-- Configure les event listeners (`interactionCreate`, `guildMemberUpdate`)
-- Lance la resync au démarrage et le vérificateur d'expirations
+- Configure les event listeners (`interactionCreate`, `guildMemberUpdate`, `guildMemberAdd`)
+- Lance la resync au démarrage et le vérificateur d'expirations/rappels
 - Démarre le bot via `client.login()`
 
 ### `src/syncRoles.js` — Commandes slash
 
-10 commandes slash avec autocomplétion, cooldown et vérification des permissions :
+12 commandes slash avec autocomplétion, cooldown et vérification des permissions :
 
 | Commande | Description | Cooldown |
 |----------|-------------|----------|
@@ -57,6 +57,8 @@ Le bot suit une architecture modulaire avec des modules séparés par responsabi
 | `/supprimer_sync_role` | Supprimer une correspondance | 5s |
 | `/voir_sync_roles` | Voir toutes les correspondances du serveur (filtré par guild) | Non |
 | `/resync @membre` | Resynchroniser les rôles d'un membre (embed détaillé par serveur) | Non |
+| `/sync_status @membre` | État de sync d'un membre : rôles source/cible + temps restant | Non |
+| `/historique` | 20 dernières actions de synchronisation avec timestamps | Non |
 | `/nettoyer_sync` | Supprimer les syncs orphelines (rôle/serveur supprimé) | Non |
 | `/copier_sync` | Copier les configs d'un serveur cible vers un autre | 5s |
 | `/exporter_config` | Exporter la configuration en fichier JSON | Non |
@@ -73,10 +75,14 @@ Le bot suit une architecture modulaire avec des modules séparés par responsabi
 ### `src/syncListener.js` — Sync automatique
 
 - **`onMemberUpdate`** : détecte les ajouts/retraits de rôles en temps réel et synchronise vers les serveurs cibles
+- **`onMemberJoin`** : quand un membre rejoint un serveur cible, attribue automatiquement les rôles correspondants
 - **`resyncOnReady`** : resync complète au démarrage avec rate limiting (`RESYNC_DELAI = 500ms` entre chaque appel API)
-- **`startExpirationChecker`** : `setInterval` (toutes les minutes) qui retire les rôles dont la durée a expiré
+- **`startExpirationChecker`** : `setInterval` (toutes les minutes) qui :
+  - Envoie un **rappel jaune** dans le canal de log **1h avant** l'expiration d'un rôle (une seule fois par entrée, via colonne `rappel_envoye`)
+  - Retire les rôles dont la durée a expiré
 - **Retry avec backoff exponentiel** via `avecRetry()` sur tous les appels API Discord
-- **Logs détaillés** avec embed coloré (vert=ajout, orange=retrait, rouge=erreur)
+- **Historique** : chaque action de sync (ajout, retrait, expiration, join) est enregistrée dans la table `sync_history`
+- **Logs détaillés** avec embed coloré (vert=ajout, orange=retrait, rouge=erreur, jaune=rappel)
 
 ### `src/logging.js` — Audit
 
@@ -93,12 +99,13 @@ Le bot suit une architecture modulaire avec des modules séparés par responsabi
 
 ### `src/database.js` — Base de données
 
-- `getPool()` : retourne le pool de connexions MySQL (singleton)
-- `initDb()` : crée les tables `role_sync` et `role_sync_actif` si elles n'existent pas
+- `getPool()` : retourne le pool de connexions MySQL (singleton, avec `connectTimeout: 10000`, `supportBigNumbers`, `bigNumberStrings`)
+- `initDb()` : crée les tables `role_sync`, `role_sync_actif` et `sync_history` si elles n'existent pas ; gère les migrations (ajout colonne `rappel_envoye`) ; affiche un diagnostic détaillé en cas d'erreur de connexion
+- `enregistrerHistorique()` : insère une entrée dans `sync_history` pour tracer chaque action de sync
 
 ## Schéma de base de données
 
-La base MySQL contient 2 tables, créées automatiquement au démarrage par `initDb()` :
+La base MySQL contient 3 tables, créées automatiquement au démarrage par `initDb()` :
 
 ```sql
 -- Table des correspondances de rôles
@@ -122,7 +129,22 @@ CREATE TABLE role_sync_actif (
     target_guild_id BIGINT NOT NULL,
     target_role_id BIGINT NOT NULL,
     synced_at DOUBLE NOT NULL,            -- Timestamp Unix du moment de la sync
+    rappel_envoye TINYINT DEFAULT 0,      -- 1 si le rappel 1h avant a été envoyé
     UNIQUE KEY unique_actif (member_id, source_guild_id, source_role_id, target_guild_id, target_role_id)
+);
+
+-- Table d'historique des synchronisations
+CREATE TABLE sync_history (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    action VARCHAR(100) NOT NULL,         -- Type d'action (Ajout automatique, Retrait, Expiration, etc.)
+    member_id BIGINT NOT NULL,
+    member_tag VARCHAR(100),              -- Tag Discord du membre (ex: User#1234)
+    source_guild_id BIGINT,
+    source_role_name VARCHAR(100),
+    target_guild_id BIGINT,
+    target_guild_name VARCHAR(100),
+    target_role_name VARCHAR(100),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
@@ -133,12 +155,14 @@ Définies dans `.env` (voir `.env.example` pour le template) :
 | Variable           | Description                                              |
 |--------------------|----------------------------------------------------------|
 | `DISCORD_TOKEN`    | Token d'authentification du bot                          |
-| `DB_HOST`          | Hôte du serveur MySQL                                    |
+| `DB_HOST`          | Hôte du serveur MySQL (depuis Docker : `172.18.0.1`)    |
 | `DB_PORT`          | Port du serveur MySQL (défaut: 3306)                     |
 | `DB_USER`          | Utilisateur MySQL                                        |
 | `DB_PASSWORD`      | Mot de passe MySQL                                       |
 | `DB_NAME`          | Nom de la base de données MySQL                          |
 | `LOG_CHANNEL_NAME` | Nom du canal textuel Discord pour les logs d'audit       |
+
+**Note Docker/Pterodactyl :** Ne pas utiliser `localhost` ou `127.0.0.1` pour `DB_HOST` — ces adresses pointent vers le container lui-même. Utiliser `172.18.0.1` (gateway réseau `pterodactyl0`) ou l'IP publique du serveur. Vérifier aussi que MySQL écoute sur `0.0.0.0` (`bind-address` dans `mysqld.cnf`) et que le firewall autorise le port 3306 depuis le réseau Docker.
 
 ## Comment lancer
 
@@ -169,7 +193,7 @@ npm start
 
 - **Les commentaires et textes UI sont en français.** Suivre cette convention pour tout nouveau texte.
 - Nommage JavaScript en **camelCase** pour les variables/fonctions.
-- Noms de commandes slash en français avec **snake_case** : `ajouter_sync_role`, `supprimer_sync_role`, `voir_sync_roles`, `resync`, `nettoyer_sync`, `copier_sync`, `exporter_config`, `importer_config`.
+- Noms de commandes slash en français avec **snake_case** : `ajouter_sync_role`, `supprimer_sync_role`, `voir_sync_roles`, `resync`, `sync_status`, `historique`, `nettoyer_sync`, `copier_sync`, `exporter_config`, `importer_config`.
 
 ### Patterns à suivre
 
@@ -178,17 +202,25 @@ npm start
 3. **Requêtes SQL paramétrées** — Toujours utiliser `?` comme placeholders, jamais de template literals.
 4. **Réponses éphémères** — Les commandes de mutation répondent avec `ephemeral: true`.
 5. **Log d'audit** — Toute action utilisateur appelle `logAction()` après exécution.
-6. **Gestion des erreurs** — `try/catch` sur toutes les commandes avec message utilisateur en cas d'erreur.
-7. **Retry sur les appels API** — Utiliser `avecRetry()` pour les appels Discord susceptibles de rate limit.
-8. **Contraintes UNIQUE en DB** — Gérer `ER_DUP_ENTRY` pour les doublons.
-9. **Cooldown anti-spam** — 5 secondes sur les commandes de modification via la Map `cooldowns`.
-10. **`setDefaultMemberPermissions(Administrator)`** sur les commandes d'administration.
+6. **Historique** — Toute action de sync appelle `enregistrerHistorique()` pour la table `sync_history`.
+7. **Gestion des erreurs** — `try/catch` sur toutes les commandes avec message utilisateur en cas d'erreur.
+8. **Retry sur les appels API** — Utiliser `avecRetry()` pour les appels Discord susceptibles de rate limit.
+9. **Contraintes UNIQUE en DB** — Gérer `ER_DUP_ENTRY` pour les doublons.
+10. **Cooldown anti-spam** — 5 secondes sur les commandes de modification via la Map `cooldowns`.
+11. **`setDefaultMemberPermissions(Administrator)`** sur les commandes d'administration.
+12. **Migrations DB** — Pour ajouter une colonne à une table existante, utiliser `ALTER TABLE ... ADD COLUMN` dans un `try/catch` (ignore si déjà existante).
 
 ### Ajouter une nouvelle commande
 
 1. Définir le `SlashCommandBuilder` dans la fonction `getCommands()` de `src/syncRoles.js`.
 2. Ajouter le handler dans le `switch` de `handleCommand()`.
 3. Si autocomplete nécessaire, ajouter dans `handleAutocomplete()`.
+
+### Ajouter un nouvel événement
+
+1. Créer la fonction dans `src/syncListener.js`.
+2. L'exporter dans le `module.exports`.
+3. L'importer dans `index.js` et l'attacher au `client.on('eventName', ...)`.
 
 ### Limitations connues
 
