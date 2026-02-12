@@ -16,6 +16,7 @@ function getPool() {
             waitForConnections: true,
             connectionLimit: 10,
             queueLimit: 0,
+            connectTimeout: 10000,
             supportBigNumbers: true,
             bigNumberStrings: true,
         });
@@ -28,6 +29,28 @@ function getPool() {
  */
 async function initDb() {
     const db = getPool();
+
+    // Tester la connexion avant de créer les tables
+    try {
+        const conn = await db.getConnection();
+        console.log(`Connexion MySQL établie vers ${process.env.DB_HOST}:${process.env.DB_PORT || 3306}`);
+        conn.release();
+    } catch (error) {
+        console.error(`Impossible de se connecter à MySQL sur ${process.env.DB_HOST}:${process.env.DB_PORT || 3306}`);
+        console.error(`Utilisateur: ${process.env.DB_USER}, Base: ${process.env.DB_NAME}`);
+        console.error(`Erreur: ${error.message} (code: ${error.code})`);
+        if (error.code === 'ETIMEDOUT' || error.code === 'ECONNREFUSED') {
+            console.error('');
+            console.error('=== DIAGNOSTIC ===');
+            console.error('Depuis un container Docker Pterodactyl, utilisez :');
+            console.error('  - DB_HOST=172.18.0.1  (gateway réseau pterodactyl0)');
+            console.error('  - ou DB_HOST=<IP_PUBLIQUE_DU_SERVEUR>');
+            console.error('Vérifiez aussi que MySQL écoute sur 0.0.0.0 (bind-address dans mysqld.cnf)');
+            console.error('et que le firewall autorise le port 3306 depuis le réseau Docker.');
+            console.error('==================');
+        }
+        throw error;
+    }
 
     // Table des correspondances de rôles
     await db.execute(`
