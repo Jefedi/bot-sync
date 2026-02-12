@@ -58,11 +58,4 @@ async function requireConfig(message, context, serviceName) {
     return config;
 }
 
-/**
- * Invalide le cache de configuration d'un service pour un serveur.
- */
-function invalidateServiceConfig(guildId, serviceName) {
-    serviceConfigCache.delete(`${guildId}:${serviceName}`);
-}
-
-module.exports = { getServiceConfig, requireConfig, invalidateServiceConfig };
+module.exports = { getServiceConfig, requireConfig };

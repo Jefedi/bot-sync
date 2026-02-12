@@ -151,4 +151,4 @@ function setupCommandHandler(client, modules) {
     });
 }
 
-module.exports = { setupCommandHandler, getPrefix, setPrefix, PREFIX_DEFAULT };
+module.exports = { setupCommandHandler, getPrefix, setPrefix };

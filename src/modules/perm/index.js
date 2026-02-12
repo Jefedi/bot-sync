@@ -1,4 +1,4 @@
-const { createSuccessEmbed, createErrorEmbed, createInfoEmbed, createEmbed, COLORS } = require('../../utils/embeds');
+const { createSuccessEmbed, createErrorEmbed, createEmbed, COLORS } = require('../../utils/embeds');
 const { logAction, logAudit } = require('../../utils/logger');
 const { parseUserMention } = require('../../utils/helpers');
 const { invalidateUserCache, invalidateCommandCache, getUserLevel } = require('../../core/permissions');

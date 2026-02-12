@@ -1,8 +1,7 @@
 const { getDb } = require('../../core/database');
-const { withRetry, sleep } = require('../../utils/helpers');
-const { logAction, logAudit, getLogChannel } = require('../../utils/logger');
+const { withRetry, sleep, formatDuration } = require('../../utils/helpers');
+const { logAudit, getLogChannel } = require('../../utils/logger');
 const { createEmbed, COLORS } = require('../../utils/embeds');
-const { formatDuration } = require('../../utils/helpers');
 
 const RESYNC_DELAY = 500; // ms entre chaque appel API
 
@@ -33,7 +32,6 @@ async function onMemberUpdate(client, oldMember, newMember) {
                 targetGuildId: sync.target_guild_id,
                 targetRoleId: sync.target_role_id,
                 durationMinutes: sync.duration_minutes,
-                note: sync.note,
             });
         }
     }
@@ -100,7 +98,6 @@ async function onMemberJoin(client, member) {
                 targetGuildId,
                 targetRoleId: sync.target_role_id,
                 durationMinutes: sync.duration_minutes,
-                note: sync.note,
                 action: 'Ajout (arrivée)',
             });
 
@@ -205,7 +202,7 @@ function startExpirationChecker(client, db) {
                 // Récupérer la config de sync pour avoir la durée
                 const { data: syncConfig } = await db
                     .from('role_sync')
-                    .select('duration_minutes, note')
+                    .select('duration_minutes')
                     .eq('source_guild_id', active.source_guild_id)
                     .eq('source_role_id', active.source_role_id)
                     .eq('target_guild_id', active.target_guild_id)
@@ -227,7 +224,7 @@ function startExpirationChecker(client, db) {
 
                 // Expiré → retirer le rôle
                 if (timeLeft <= 0) {
-                    await handleExpiration(client, db, active, syncConfig);
+                    await handleExpiration(client, db, active);
                 }
             }
         } catch (err) {
@@ -238,7 +235,7 @@ function startExpirationChecker(client, db) {
 
 // --- Fonctions internes ---
 
-async function addSyncedRole(client, db, { memberId, memberTag, sourceGuildId, sourceRoleName, targetGuildId, targetRoleId, durationMinutes, note, action }) {
+async function addSyncedRole(client, db, { memberId, memberTag, sourceGuildId, sourceRoleName, targetGuildId, targetRoleId, durationMinutes, action }) {
     const targetGuild = client.guilds.cache.get(targetGuildId);
     if (!targetGuild) return;
 
@@ -367,7 +364,7 @@ async function sendReminder(client, db, active, syncConfig, timeLeft) {
     });
 }
 
-async function handleExpiration(client, db, active, syncConfig) {
+async function handleExpiration(client, db, active) {
     const targetGuild = client.guilds.cache.get(active.target_guild_id);
     if (!targetGuild) {
         await db.from('role_sync_active').delete().eq('id', active.id);

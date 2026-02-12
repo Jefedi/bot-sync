@@ -22,13 +22,6 @@ function createErrorEmbed(description) {
         .setTimestamp();
 }
 
-function createWarningEmbed(description) {
-    return new EmbedBuilder()
-        .setColor(COLORS.warning)
-        .setDescription(description)
-        .setTimestamp();
-}
-
 function createInfoEmbed(description) {
     return new EmbedBuilder()
         .setColor(COLORS.info)
@@ -36,7 +29,7 @@ function createInfoEmbed(description) {
         .setTimestamp();
 }
 
-function createEmbed({ title, description, color, fields, footer, thumbnail }) {
+function createEmbed({ title, description, color, fields, footer }) {
     const embed = new EmbedBuilder()
         .setColor(color || COLORS.info)
         .setTimestamp();
@@ -45,9 +38,8 @@ function createEmbed({ title, description, color, fields, footer, thumbnail }) {
     if (description) embed.setDescription(description);
     if (fields && fields.length > 0) embed.addFields(fields);
     if (footer) embed.setFooter({ text: footer });
-    if (thumbnail) embed.setThumbnail(thumbnail);
 
     return embed;
 }
 
-module.exports = { COLORS, createSuccessEmbed, createErrorEmbed, createWarningEmbed, createInfoEmbed, createEmbed };
+module.exports = { COLORS, createSuccessEmbed, createErrorEmbed, createInfoEmbed, createEmbed };

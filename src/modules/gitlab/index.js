@@ -1,5 +1,5 @@
 const { createEmbed, createErrorEmbed, COLORS } = require('../../utils/embeds');
-const { getServiceConfig, requireConfig } = require('../_shared');
+const { requireConfig } = require('../_shared');
 
 module.exports = {
     name: 'gitlab',
