@@ -13,6 +13,7 @@ bot-sync/
 ├── bot.py                 # Main entry point — loads cogs and starts the bot
 ├── cogs/
 │   ├── sync_roles.py      # Core role synchronization logic (slash commands)
+│   ├── sync_listener.py   # Automatic role sync — listens for role changes and applies them
 │   └── logging.py         # Audit logging cog — posts action embeds to a log channel
 ├── .env                   # Environment variables (DISCORD_TOKEN, DB_PATH, LOG_CHANNEL_NAME)
 ├── requirements.txt       # Python dependencies (currently empty)
@@ -36,6 +37,7 @@ The bot follows the **discord.py Cogs pattern** for modular organization:
   - `/ajouter_sync_role` — Inserts a role sync mapping into the `role_sync` SQLite table
   - `/supprimer_sync_role` — Deletes a role sync mapping
   - `/voir_sync_roles` — Queries and displays all active sync mappings as an embed
+- **`cogs/sync_listener.py`** (`SyncListener` cog) — Listens to `on_member_update` events. When a role is added or removed on the source server, it automatically applies the corresponding change on all target servers defined in the database. Handles errors (permissions, HTTP) and logs every sync action.
 - **`cogs/logging.py`** (`Logging` cog) — Provides `log_action()` method that posts audit embed messages to the channel named by `LOG_CHANNEL_NAME`.
 
 ### Inter-cog communication

@@ -21,6 +21,7 @@ async def main():
     # Charger les extensions (Cogs)
     await bot.load_extension("cogs.sync_roles")
     await bot.load_extension("cogs.logging")
+    await bot.load_extension("cogs.sync_listener")
 
     # Démarrage du bot
     await bot.start(TOKEN)
