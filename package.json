@@ -1,0 +1,14 @@
+{
+  "name": "bot-sync",
+  "version": "1.0.0",
+  "description": "Bot Discord de synchronisation de rôles multi-serveurs",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.14.1",
+    "dotenv": "^16.3.1",
+    "mysql2": "^3.6.0"
+  }
+}

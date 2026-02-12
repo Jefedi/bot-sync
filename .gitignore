@@ -1,0 +1,25 @@
+# Environnement
+.env
+
+# Node.js
+node_modules/
+package-lock.json
+
+# Base de données (ancien SQLite)
+*.db
+
+# Python (ancien)
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
