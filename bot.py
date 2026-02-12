@@ -22,6 +22,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 async def init_db():
     """Initialise la base de données et crée les tables si elles n'existent pas."""
     async with aiosqlite.connect(DB_PATH) as db:
+        # Table des correspondances de rôles avec contrainte UNIQUE
         await db.execute("""
             CREATE TABLE IF NOT EXISTS role_sync (
                 source_guild_id INTEGER,
@@ -29,9 +30,11 @@ async def init_db():
                 target_guild_id INTEGER,
                 target_role_id INTEGER,
                 duree_minutes INTEGER,
-                note TEXT
+                note TEXT,
+                UNIQUE(source_guild_id, source_role_id, target_guild_id, target_role_id)
             )
         """)
+        # Table de suivi des syncs actifs (pour la durée)
         await db.execute("""
             CREATE TABLE IF NOT EXISTS role_sync_actif (
                 member_id INTEGER,
@@ -39,8 +42,18 @@ async def init_db():
                 source_role_id INTEGER,
                 target_guild_id INTEGER,
                 target_role_id INTEGER,
-                synced_at REAL
+                synced_at REAL,
+                UNIQUE(member_id, source_guild_id, source_role_id, target_guild_id, target_role_id)
             )
+        """)
+        # Index pour accélérer les recherches par serveur/rôle source
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_role_sync_source
+            ON role_sync (source_guild_id, source_role_id)
+        """)
+        await db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_role_sync_actif_source
+            ON role_sync_actif (source_guild_id, source_role_id)
         """)
         await db.commit()
     print("Base de données initialisée.")

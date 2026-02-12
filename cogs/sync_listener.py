@@ -1,16 +1,23 @@
+import asyncio
 import time
 import discord
 from discord.ext import commands, tasks
 import aiosqlite
 import os
 
+from cogs.utils import formater_duree
+
 DB_PATH = os.getenv("DB_PATH")
+
+# Délai entre chaque appel API Discord au resync (en secondes)
+# Évite le rate limit de Discord (~50 requêtes/seconde)
+RESYNC_DELAI = 0.5
 
 
 class SyncListener(commands.Cog):
     """Écoute les changements de rôles sur le serveur racine et synchronise
     automatiquement les rôles correspondants sur les serveurs cibles.
-    Au démarrage du bot, effectue un resync complet pour rattraper les changements manqués.
+    Au démarrage du bot, effectue un resync complet avec rate limiting.
     Vérifie périodiquement les rôles expirés et les retire automatiquement."""
 
     def __init__(self, bot):
@@ -29,7 +36,6 @@ class SyncListener(commands.Cog):
         maintenant = time.time()
 
         async with aiosqlite.connect(DB_PATH) as db:
-            # Trouver les syncs actifs dont la durée est dépassée
             async with db.execute(
                 """SELECT a.member_id, a.source_guild_id, a.source_role_id,
                           a.target_guild_id, a.target_role_id, a.synced_at,
@@ -48,7 +54,6 @@ class SyncListener(commands.Cog):
             if maintenant < expire_at:
                 continue
 
-            # Le rôle a expiré → le retirer
             target_guild = self.bot.get_guild(target_guild_id)
             if not target_guild:
                 continue
@@ -66,7 +71,7 @@ class SyncListener(commands.Cog):
                 try:
                     await target_membre.remove_roles(
                         target_role,
-                        reason=f"Durée expirée — rôle synchronisé depuis {duree_minutes}m",
+                        reason=f"Durée expirée — rôle synchronisé depuis {formater_duree(duree_minutes)}",
                     )
                     await self._log_sync(
                         "Expiration de rôle — durée écoulée",
@@ -91,12 +96,12 @@ class SyncListener(commands.Cog):
         await self.bot.wait_until_ready()
 
     # ──────────────────────────────────────────────
-    # Resync au démarrage
+    # Resync au démarrage (avec rate limiting)
     # ──────────────────────────────────────────────
 
     @commands.Cog.listener()
     async def on_ready(self):
-        """Resynchronisation complète au démarrage du bot."""
+        """Resynchronisation complète au démarrage du bot avec rate limiting."""
         print("Resynchronisation des rôles au démarrage...")
 
         async with aiosqlite.connect(DB_PATH) as db:
@@ -104,6 +109,9 @@ class SyncListener(commands.Cog):
                 "SELECT source_guild_id, source_role_id, target_guild_id, target_role_id, duree_minutes, note FROM role_sync"
             ) as cursor:
                 mappings = await cursor.fetchall()
+
+        ajouts = 0
+        retraits = 0
 
         for source_guild_id, source_role_id, target_guild_id, target_role_id, duree_minutes, note in mappings:
             source_guild = self.bot.get_guild(source_guild_id)
@@ -116,7 +124,6 @@ class SyncListener(commands.Cog):
             if not source_role or not target_role:
                 continue
 
-            # Pour chaque membre du serveur source, vérifier la cohérence
             for membre in source_guild.members:
                 target_membre = target_guild.get_member(membre.id)
                 if not target_membre:
@@ -126,18 +133,17 @@ class SyncListener(commands.Cog):
                 a_le_role_cible = target_role in target_membre.roles
 
                 if a_le_role_source and not a_le_role_cible:
-                    # Il a le rôle sur le serveur racine mais pas sur la cible → ajouter
                     try:
                         await target_membre.add_roles(
                             target_role,
                             reason=f"Resync au démarrage — rôle {source_role.name}",
                         )
-                        # Enregistrer dans role_sync_actif si durée définie
                         if duree_minutes:
                             await self._enregistrer_sync_actif(
                                 membre.id, source_guild_id, source_role_id,
                                 target_guild_id, target_role_id,
                             )
+                        ajouts += 1
                         await self._log_sync(
                             "Ajout au resync (démarrage)",
                             membre, source_role, target_role, target_guild,
@@ -149,9 +155,10 @@ class SyncListener(commands.Cog):
                             membre, source_role, target_role, target_guild,
                             source_guild=source_guild, note=note,
                         )
+                    # Rate limit : attendre entre chaque appel API
+                    await asyncio.sleep(RESYNC_DELAI)
 
                 elif not a_le_role_source and a_le_role_cible:
-                    # Il n'a plus le rôle sur le serveur racine → retirer
                     try:
                         await target_membre.remove_roles(
                             target_role,
@@ -161,6 +168,7 @@ class SyncListener(commands.Cog):
                             membre.id, source_guild_id, source_role_id,
                             target_guild_id, target_role_id,
                         )
+                        retraits += 1
                         await self._log_sync(
                             "Retrait au resync (démarrage)",
                             membre, source_role, target_role, target_guild,
@@ -172,8 +180,10 @@ class SyncListener(commands.Cog):
                             membre, source_role, target_role, target_guild,
                             source_guild=source_guild, note=note,
                         )
+                    # Rate limit : attendre entre chaque appel API
+                    await asyncio.sleep(RESYNC_DELAI)
 
-        print("Resync terminé.")
+        print(f"Resync terminé : {ajouts} ajout(s), {retraits} retrait(s)")
 
         # Lancer la tâche de vérification des expirations
         if not self.verifier_expirations.is_running():
@@ -197,7 +207,6 @@ class SyncListener(commands.Cog):
         source_guild = after.guild
 
         async with aiosqlite.connect(DB_PATH) as db:
-            # Traiter les rôles ajoutés
             for role in roles_ajoutes:
                 async with db.execute(
                     """SELECT target_guild_id, target_role_id, duree_minutes, note FROM role_sync
@@ -209,7 +218,6 @@ class SyncListener(commands.Cog):
                 for target_guild_id, target_role_id, duree_minutes, note in rows:
                     await self._ajouter_role(after, role, target_guild_id, target_role_id, duree_minutes, note)
 
-            # Traiter les rôles retirés
             for role in roles_retires:
                 async with db.execute(
                     """SELECT target_guild_id, target_role_id, duree_minutes, note FROM role_sync
@@ -247,7 +255,6 @@ class SyncListener(commands.Cog):
                 target_role,
                 reason=f"Synchronisation depuis {membre.guild.name} — rôle {source_role.name}",
             )
-            # Enregistrer dans role_sync_actif si durée définie
             if duree_minutes:
                 await self._enregistrer_sync_actif(
                     membre.id, membre.guild.id, source_role.id,
@@ -318,15 +325,9 @@ class SyncListener(commands.Cog):
     async def _enregistrer_sync_actif(self, member_id, source_guild_id, source_role_id, target_guild_id, target_role_id):
         """Enregistre un sync actif avec le timestamp pour le suivi de durée."""
         async with aiosqlite.connect(DB_PATH) as db:
-            # Éviter les doublons
             await db.execute(
-                """DELETE FROM role_sync_actif
-                   WHERE member_id = ? AND source_guild_id = ? AND source_role_id = ?
-                   AND target_guild_id = ? AND target_role_id = ?""",
-                (member_id, source_guild_id, source_role_id, target_guild_id, target_role_id),
-            )
-            await db.execute(
-                """INSERT INTO role_sync_actif (member_id, source_guild_id, source_role_id, target_guild_id, target_role_id, synced_at)
+                """INSERT OR REPLACE INTO role_sync_actif
+                   (member_id, source_guild_id, source_role_id, target_guild_id, target_role_id, synced_at)
                    VALUES (?, ?, ?, ?, ?, ?)""",
                 (member_id, source_guild_id, source_role_id, target_guild_id, target_role_id, time.time()),
             )
@@ -346,13 +347,11 @@ class SyncListener(commands.Cog):
     async def _log_sync(self, action, membre, source_role, target_role, target_guild, source_guild=None, note=None, duree_minutes=None):
         """Envoie un log d'audit détaillé pour chaque action de synchronisation."""
         log_channel_name = os.getenv("LOG_CHANNEL_NAME")
-        # Chercher le canal de log sur le serveur source
         guild_pour_log = source_guild or membre.guild
         log_channel = discord.utils.get(guild_pour_log.text_channels, name=log_channel_name)
         if not log_channel:
             return
 
-        # Couleur selon le type d'action
         if "Échec" in action:
             couleur = discord.Color.red()
         elif "Retrait" in action or "Expiration" in action:
@@ -371,30 +370,11 @@ class SyncListener(commands.Cog):
         embed.add_field(name="Rôle Cible", value=f"{target_role.name} (ID: {target_role.id})", inline=True)
         embed.add_field(name="Serveur Cible", value=f"{target_guild.name}", inline=True)
         if duree_minutes:
-            embed.add_field(name="Durée", value=self._formater_duree(duree_minutes), inline=True)
+            embed.add_field(name="Durée", value=formater_duree(duree_minutes), inline=True)
         if note:
             embed.add_field(name="Note", value=note, inline=False)
 
         await log_channel.send(embed=embed)
-
-    @staticmethod
-    def _formater_duree(minutes: int) -> str:
-        """Formate une durée en minutes vers un texte lisible."""
-        if minutes >= 1440:
-            jours = minutes // 1440
-            reste = minutes % 1440
-            heures = reste // 60
-            if heures > 0:
-                return f"{jours}j {heures}h"
-            return f"{jours}j"
-        elif minutes >= 60:
-            heures = minutes // 60
-            reste = minutes % 60
-            if reste > 0:
-                return f"{heures}h {reste}m"
-            return f"{heures}h"
-        else:
-            return f"{minutes}m"
 
 
 async def setup(bot):
