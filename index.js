@@ -3,7 +3,7 @@ require('dotenv').config();
 const { Client, GatewayIntentBits, REST, Routes } = require('discord.js');
 const { initDb } = require('./src/database');
 const { getCommands, handleCommand, handleAutocomplete } = require('./src/syncRoles');
-const { onMemberUpdate, resyncOnReady, startExpirationChecker } = require('./src/syncListener');
+const { onMemberUpdate, onMemberJoin, resyncOnReady, startExpirationChecker } = require('./src/syncListener');
 
 // Créer le client Discord avec les intents nécessaires
 const client = new Client({
@@ -61,6 +61,16 @@ client.on('interactionCreate', async (interaction) => {
 client.on('guildMemberUpdate', (oldMember, newMember) => {
     onMemberUpdate(client, oldMember, newMember).catch(error => {
         console.error('Erreur lors de la synchronisation de rôle:', error);
+    });
+});
+
+// ──────────────────────────────────────────────
+// Sync au join : quand un membre rejoint un serveur cible
+// ──────────────────────────────────────────────
+
+client.on('guildMemberAdd', (member) => {
+    onMemberJoin(client, member).catch(error => {
+        console.error('Erreur lors de la sync au join:', error);
     });
 });
 

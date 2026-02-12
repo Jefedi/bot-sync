@@ -134,6 +134,17 @@ function getCommands() {
             .setDescription('Importe une configuration de synchronisation depuis un fichier JSON.')
             .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
             .addAttachmentOption(opt => opt.setName('fichier').setDescription('Le fichier JSON exporté avec /exporter_config').setRequired(true)),
+
+        new SlashCommandBuilder()
+            .setName('historique')
+            .setDescription('Affiche les 20 dernières actions de synchronisation.')
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
+
+        new SlashCommandBuilder()
+            .setName('sync_status')
+            .setDescription("Affiche l'état de synchronisation d'un membre sur tous les serveurs cibles.")
+            .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)
+            .addUserOption(opt => opt.setName('membre').setDescription('Le membre dont on veut voir le statut').setRequired(true)),
     ];
 }
 
@@ -166,6 +177,8 @@ async function handleCommand(interaction) {
             case 'copier_sync': return await cmdCopierSync(interaction);
             case 'exporter_config': return await cmdExporterConfig(interaction);
             case 'importer_config': return await cmdImporterConfig(interaction);
+            case 'historique': return await cmdHistorique(interaction);
+            case 'sync_status': return await cmdSyncStatus(interaction);
         }
     } catch (error) {
         console.error(`Erreur commande ${commandName}:`, error);
@@ -225,6 +238,8 @@ async function cmdAide(interaction) {
                 name: 'Gestion',
                 value:
                     '`/resync @membre` — Resynchroniser les rôles d\'un membre\n' +
+                    '`/sync_status @membre` — Voir l\'état de sync d\'un membre + temps restant\n' +
+                    '`/historique` — 20 dernières actions de synchronisation\n' +
                     '`/nettoyer_sync` — Supprimer les syncs orphelines\n' +
                     '`/bot_status` — Dashboard du bot (état, stats, permissions)',
                 inline: false,
@@ -253,8 +268,9 @@ async function cmdAide(interaction) {
                     '1. Configurez les correspondances depuis le **serveur racine**\n' +
                     '2. Quand un rôle est **ajouté/retiré** sur le serveur racine, ' +
                     'le rôle correspondant est automatiquement synchronisé sur le serveur cible\n' +
-                    '3. Au **démarrage** du bot, tous les rôles sont vérifiés et mis à jour\n' +
-                    '4. Les rôles avec une **durée** expirent automatiquement',
+                    '3. Quand un membre **rejoint** un serveur cible, ses rôles sont attribués automatiquement\n' +
+                    '4. Au **démarrage** du bot, tous les rôles sont vérifiés et mis à jour\n' +
+                    '5. Les rôles avec une **durée** expirent automatiquement (rappel 1h avant)',
                 inline: false,
             },
         )
@@ -855,6 +871,136 @@ async function cmdImporterConfig(interaction) {
 
     await interaction.followUp({ content: msg });
     await logAction(interaction.guild, 'Import de configuration', interaction.user);
+}
+
+// ──────────────────────────────────────────────
+// /historique — 20 dernières actions de sync
+// ──────────────────────────────────────────────
+
+async function cmdHistorique(interaction) {
+    const db = getPool();
+    const [rows] = await db.execute(
+        `SELECT action, member_id, member_tag, source_role_name, target_guild_name, target_role_name, created_at
+         FROM sync_history WHERE source_guild_id = ?
+         ORDER BY created_at DESC LIMIT 20`,
+        [interaction.guild.id]
+    );
+
+    if (rows.length === 0) {
+        return interaction.reply({ content: 'Aucun historique de synchronisation.', ephemeral: true });
+    }
+
+    const lignes = rows.map(row => {
+        const ts = Math.floor(new Date(row.created_at).getTime() / 1000);
+        return `<t:${ts}:R> **${row.action}**\n> ${row.member_tag || row.member_id} — ${row.source_role_name || '?'} → ${row.target_role_name || '?'} (${row.target_guild_name || '?'})`;
+    });
+
+    const embed = new EmbedBuilder()
+        .setTitle('Historique des synchronisations')
+        .setDescription(lignes.join('\n\n').slice(0, 4096))
+        .setColor(0x3498DB)
+        .setFooter({ text: `${rows.length} dernière(s) action(s)` });
+
+    await interaction.reply({ embeds: [embed], ephemeral: true });
+}
+
+// ──────────────────────────────────────────────
+// /sync_status @membre — État de sync détaillé
+// ──────────────────────────────────────────────
+
+async function cmdSyncStatus(interaction) {
+    await interaction.deferReply({ ephemeral: true });
+
+    const membre = interaction.options.getMember('membre');
+    if (!membre) {
+        return interaction.followUp({ content: 'Membre introuvable sur ce serveur.' });
+    }
+
+    const db = getPool();
+
+    // Récupérer tous les mappings pour ce serveur
+    const [mappings] = await db.execute(
+        `SELECT source_role_id, target_guild_id, target_role_id, duree_minutes, note
+         FROM role_sync WHERE source_guild_id = ?`,
+        [interaction.guild.id]
+    );
+
+    if (mappings.length === 0) {
+        return interaction.followUp({ content: 'Aucune synchronisation configurée sur ce serveur.' });
+    }
+
+    // Récupérer les syncs actives de ce membre
+    const [actifs] = await db.execute(
+        `SELECT source_role_id, target_guild_id, target_role_id, synced_at
+         FROM role_sync_actif WHERE member_id = ? AND source_guild_id = ?`,
+        [membre.id, interaction.guild.id]
+    );
+
+    const actifsMap = new Map();
+    for (const a of actifs) {
+        actifsMap.set(`${a.source_role_id}-${a.target_guild_id}-${a.target_role_id}`, a.synced_at);
+    }
+
+    const maintenant = Date.now() / 1000;
+    const lignes = [];
+
+    for (const mapping of mappings) {
+        const sourceRole = interaction.guild.roles.cache.get(mapping.source_role_id);
+        const sourceRoleName = sourceRole ? sourceRole.name : `Supprimé (${mapping.source_role_id})`;
+        const aLeRoleSource = sourceRole ? membre.roles.cache.has(sourceRole.id) : false;
+
+        const targetGuild = interaction.client.guilds.cache.get(mapping.target_guild_id);
+        const targetGuildName = targetGuild ? targetGuild.name : 'Inconnu';
+        const targetRole = targetGuild ? targetGuild.roles.cache.get(mapping.target_role_id) : null;
+        const targetRoleName = targetRole ? targetRole.name : 'Supprimé';
+
+        const targetMembre = targetGuild
+            ? (targetGuild.members.cache.get(membre.id) || await targetGuild.members.fetch(membre.id).catch(() => null))
+            : null;
+        const aLeRoleCible = targetMembre && targetRole ? targetMembre.roles.cache.has(targetRole.id) : false;
+
+        let statut;
+        if (aLeRoleSource && aLeRoleCible) {
+            statut = 'Synchronisé';
+        } else if (aLeRoleSource && !aLeRoleCible) {
+            statut = 'Désynchronisé (source oui, cible non)';
+        } else if (!aLeRoleSource && aLeRoleCible) {
+            statut = 'Désynchronisé (source non, cible oui)';
+        } else {
+            statut = 'Inactif';
+        }
+
+        let ligne = `**${sourceRoleName}** → **${targetRoleName}** (${targetGuildName})\n> Source: ${aLeRoleSource ? 'Oui' : 'Non'} | Cible: ${aLeRoleCible ? 'Oui' : 'Non'} — ${statut}`;
+
+        // Temps restant si durée configurée et rôle actif
+        if (mapping.duree_minutes && aLeRoleCible) {
+            const key = `${mapping.source_role_id}-${mapping.target_guild_id}-${mapping.target_role_id}`;
+            const syncedAt = actifsMap.get(key);
+            if (syncedAt) {
+                const expireAt = syncedAt + (mapping.duree_minutes * 60);
+                const resteSeconds = expireAt - maintenant;
+                if (resteSeconds > 0) {
+                    const resteMinutes = Math.ceil(resteSeconds / 60);
+                    ligne += `\n> Expire dans **${formaterDuree(resteMinutes)}**`;
+                } else {
+                    ligne += '\n> **Expiré** (retrait imminent)';
+                }
+            }
+        } else if (mapping.duree_minutes) {
+            ligne += `\n> Durée configurée : ${formaterDuree(mapping.duree_minutes)}`;
+        }
+
+        lignes.push(ligne);
+    }
+
+    const embed = new EmbedBuilder()
+        .setTitle(`Statut sync — ${membre.displayName}`)
+        .setDescription(lignes.join('\n\n').slice(0, 4096))
+        .setColor(0x3498DB)
+        .setThumbnail(membre.displayAvatarURL())
+        .setFooter({ text: `${mappings.length} correspondance(s) vérifiée(s)` });
+
+    await interaction.followUp({ embeds: [embed] });
 }
 
 module.exports = { getCommands, handleCommand, handleAutocomplete };
